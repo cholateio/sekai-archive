@@ -6,34 +6,31 @@ import { allToolDefinitions, toolImplementations } from '@/lib/tools/registry';
 import { generateSystemPrompt } from '@/lib/prompts/system';
 import { checkRateLimit } from '@/lib/rate-limit';
 
-// --- Supabase Admin (用於寫入 Log) ---
-const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || '');
+const supabaseClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export const runtime = 'nodejs';
 export const maxDuration = 60; // 允許執行最長 60 秒
 
 export async function POST(req) {
     const logger = new DebugLogger('API/Chat');
-    const startTotal = performance.now();
+    const startTime = performance.now();
 
+    // Check rate limit (may change to jwt token key in the future)
     const { success, ip } = await checkRateLimit(req, { limit: 5, window: '10 s' });
     const country = req.headers.get('x-vercel-ip-country') || 'unknown';
 
     if (!success) {
         logger.log(`Rate limit exceeded for IP: ${ip}`, 'warn');
-        return NextResponse.json({ error: 'Too Many Requests', reason: '系統偵測到請求過於頻繁，請稍後再試。' }, { status: 429 });
+        return NextResponse.json({ error: 'Too many requests.' }, { status: 429 });
     }
 
     try {
-        let requestData = {};
-        requestData = await req.json();
+        const requestData = await req.json();
 
-        // 前端不再傳送完整的 messages (含 System Prompt)，而是傳送 history (純對話) + config (設定)
-        const { messages: history, config, sessionId } = requestData;
+        // 前端負責傳送 history (純對話) + config (設定) + tools (允許使用的工具)
+        const { messages: history, config, sessionId, allowed_tools } = requestData;
 
         const lastUserMsg = Array.isArray(history) && history.length > 0 ? history[history.length - 1] : null;
 
@@ -41,224 +38,198 @@ export async function POST(req) {
 
         const userAgent = req.headers.get('user-agent') || '';
 
+        let availableTools = [];
+        if (allowed_tools && Array.isArray(allowed_tools) && allowed_tools.length > 0) {
+            availableTools = allToolDefinitions.filter((tool) => allowed_tools.includes(tool.function.name));
+        }
+
         logger.log(`Received request from ${ip} (${country})`, 'info');
 
         let logData = {
-            ip: ip,
-            country: country,
+            ip,
+            country,
+            session_id: sessionId,
+            user_agent: userAgent,
             query_content: queryContent.slice(0, 1000),
             favorite: config?.character || 'Unknown',
             model_used: 'gpt-4o-mini',
-            tool_used: null,
+            tool_used: [],
             status: 'success',
             tokens_input: 0,
             tokens_output: 0,
             duration_ms: 0,
+            cost_usd: 0,
             response_preview: '',
             error_msg: null,
+            finish_reason: null,
         };
 
         // Need to add system prompt at backend, do not add it at frontend
-        const systemPromptContent = generateSystemPrompt(config);
-        const systemMessage = { role: 'system', content: systemPromptContent };
-
+        const systemPromptContent = generateSystemPrompt(config || {});
         // prevent system prompt injection attack at backend
-        const safeMessages = [systemMessage, ...(Array.isArray(history) ? history.filter((m) => m.role !== 'system') : [])];
-
-        // 1st Pass: Router & Tool Selection
-        const runner = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: safeMessages, // 使用清洗後的安全陣列
-            tools: allToolDefinitions.length > 0 ? allToolDefinitions : undefined,
-            tool_choice: allToolDefinitions.length > 0 ? 'auto' : 'none',
-            stream: true,
-            stream_options: { include_usage: true },
-            max_tokens: 1000 || undefined,
-        });
+        const safeMessages = [
+            { role: 'system', content: systemPromptContent },
+            ...(Array.isArray(history) ? history.filter((m) => m.role !== 'system') : []),
+        ];
 
         const stream = new ReadableStream({
             async start(controller) {
                 const encoder = new TextEncoder();
-                let toolCalls = [];
-                let accumulatedUsage = null;
                 let fullResponse = '';
-                let finishReason = null;
-                let systemFingerprint = null;
+                let accumulatedUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
-                try {
-                    for await (const chunk of runner) {
-                        const delta = chunk.choices[0]?.delta;
+                const MAX_STEPS = 3; // Max agent steps
+                let currentStep = 0;
 
-                        if (chunk.system_fingerprint) systemFingerprint = chunk.system_fingerprint;
-                        if (chunk.choices[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
+                async function runAgentLoop() {
+                    while (currentStep < MAX_STEPS) {
+                        currentStep++;
+                        const isLastStep = currentStep === MAX_STEPS;
 
-                        if (delta?.content) {
-                            controller.enqueue(encoder.encode(delta.content));
-                            fullResponse += delta.content;
-                        }
+                        logger.log(`Agent Step ${currentStep}/${MAX_STEPS} started`, 'info');
 
-                        if (delta?.tool_calls) {
-                            delta.tool_calls.forEach((toolCall) => {
-                                const index = toolCall.index;
-                                if (!toolCalls[index]) {
-                                    toolCalls[index] = toolCall;
-                                    toolCalls[index].function.arguments = '';
-                                }
-                                if (toolCall.function?.name) {
-                                    toolCalls[index].function.name = toolCall.function.name;
-
-                                    if (!logData.tool_used) {
-                                        logData.tool_used = toolCall.function.name;
-                                    }
-                                }
-                                if (toolCall.function?.arguments) {
-                                    toolCalls[index].function.arguments += toolCall.function.arguments;
-                                }
-                            });
-                        }
-                        if (chunk.usage) accumulatedUsage = chunk.usage;
-                    }
-
-                    // --- 處理工具呼叫 (Function Calling) ---
-                    if (toolCalls.length > 0) {
-                        logger.log(`Tool usage detected: ${toolCalls.length} calls`, 'warn');
-
-                        // 把 Assistant 想要呼叫工具的意圖加回對話歷史
-                        safeMessages.push({
-                            role: 'assistant',
-                            content: null,
-                            tool_calls: toolCalls,
-                        });
-
-                        for (const toolCall of toolCalls) {
-                            const functionName = toolCall.function.name;
-                            const functionArgs = toolCall.function.arguments;
-                            const functionToCall = toolImplementations[functionName];
-
-                            if (!functionToCall) {
-                                logger.log(`Tool ${functionName} not found in registry`, 'error');
-                                messages.push({
-                                    role: 'tool',
-                                    tool_call_id: toolCall.id,
-                                    name: functionName,
-                                    content: JSON.stringify({ error: `Tool ${functionName} is not implemented.` }),
-                                });
-                                continue;
-                            }
-
-                            logger.log(`👉 [Tool Input] ${functionName} Args: ${functionArgs}`, 'info');
-
-                            // 若有參數需在此解析 JSON.parse(toolCall.function.arguments)
-                            let args = {};
-                            try {
-                                if (functionArgs) args = JSON.parse(functionArgs);
-                            } catch (e) {
-                                logger.log(`Failed to parse args for ${functionName}: ${e.message}`, 'error');
-                            }
-
-                            // 這裡將解析後的 args 物件傳進去
-                            const toolResult = await functionToCall(args);
-
-                            // Debug (See tool output)
-                            // const previewResponse =
-                            //     typeof toolResult === 'string'
-                            //         ? toolResult.length > 300
-                            //             ? toolResult.slice(0, 300) + '...'
-                            //             : toolResult
-                            //         : JSON.stringify(toolResult).slice(0, 300);
-                            // logger.log(`👈 [Tool Output] ${functionName} Result: ${previewResponse}`, 'success');
-
-                            logger.log(`👈 [Tool Result] Length: ${toolResult?.length || 0}`, 'success');
-
-                            // 把工具執行結果加回對話歷史
-                            safeMessages.push({
-                                role: 'tool',
-                                tool_call_id: toolCall.id,
-                                name: functionName,
-                                content: typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult),
-                            });
-                        }
-
-                        // 2nd Pass: Final Generation
-                        const finalStream = await openai.chat.completions.create({
+                        const runner = await openai.chat.completions.create({
                             model: 'gpt-4o-mini',
                             messages: safeMessages,
                             stream: true,
                             stream_options: { include_usage: true },
-                            max_tokens: 1000 || undefined,
+                            max_tokens: 2000,
+                            ...(availableTools.length > 0 && !isLastStep
+                                ? {
+                                      tools: availableTools,
+                                      tool_choice: 'auto',
+                                  }
+                                : {}),
                         });
 
-                        for await (const chunk of finalStream) {
-                            const content = chunk.choices[0]?.delta?.content;
+                        let toolCalls = [];
+                        let loopResponse = ''; // 紀錄單次迴圈 Assistant 產生的文字
 
-                            if (chunk.system_fingerprint) systemFingerprint = chunk.system_fingerprint;
-                            if (chunk.choices[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
+                        // 處理 OpenAI Stream Chunk
+                        for await (const chunk of runner) {
+                            const delta = chunk.choices[0]?.delta;
+                            if (chunk.choices[0]?.finish_reason) logData.finish_reason = chunk.choices[0].finish_reason;
+                            if (chunk.system_fingerprint) logData.system_fingerprint = chunk.system_fingerprint;
 
-                            if (content) {
-                                controller.enqueue(encoder.encode(content));
-                                fullResponse += content;
+                            // 串流文字給前端
+                            if (delta?.content) {
+                                controller.enqueue(encoder.encode(delta.content));
+                                loopResponse += delta.content;
+                                fullResponse += delta.content;
                             }
+
+                            // 收集 Tool Calls 參數
+                            if (delta?.tool_calls) {
+                                delta.tool_calls.forEach((toolCall) => {
+                                    const index = toolCall.index;
+                                    if (!toolCalls[index]) {
+                                        toolCalls[index] = toolCall;
+                                        toolCalls[index].function.arguments = '';
+                                    }
+                                    if (toolCall.function?.name) {
+                                        toolCalls[index].function.name = toolCall.function.name;
+                                        if (!logData.tool_used.includes(toolCall.function.name)) {
+                                            logData.tool_used.push(toolCall.function.name);
+                                        }
+                                    }
+                                    if (toolCall.function?.arguments) {
+                                        toolCalls[index].function.arguments += toolCall.function.arguments;
+                                    }
+                                });
+                            }
+
+                            // 累加 Token 計算
                             if (chunk.usage) {
-                                if (accumulatedUsage) {
-                                    accumulatedUsage.total_tokens += chunk.usage.total_tokens;
-                                    accumulatedUsage.prompt_tokens += chunk.usage.prompt_tokens;
-                                    accumulatedUsage.completion_tokens += chunk.usage.completion_tokens;
-                                } else {
-                                    accumulatedUsage = chunk.usage;
-                                }
+                                accumulatedUsage.prompt_tokens += chunk.usage.prompt_tokens;
+                                accumulatedUsage.completion_tokens += chunk.usage.completion_tokens;
+                                accumulatedUsage.total_tokens += chunk.usage.total_tokens;
                             }
                         }
+
+                        // 判斷是否需要執行工具
+                        if (toolCalls.length > 0) {
+                            logger.log(`Tool usage detected in step ${currentStep}: ${toolCalls.length} calls`, 'warn');
+
+                            // 將 Assistant 的意圖 (包含可能產生的一點點文字 + tool_calls) 加回紀錄
+                            safeMessages.push({
+                                role: 'assistant',
+                                content: loopResponse || null,
+                                tool_calls: toolCalls,
+                            });
+
+                            // 執行所有被呼叫的工具
+                            for (const toolCall of toolCalls) {
+                                const functionName = toolCall.function.name;
+                                const functionArgs = toolCall.function.arguments;
+                                const functionToCall = toolImplementations[functionName];
+
+                                if (!functionToCall) {
+                                    logger.log(`Tool ${functionName} not found`, 'error');
+                                    safeMessages.push({
+                                        role: 'tool',
+                                        tool_call_id: toolCall.id,
+                                        name: functionName,
+                                        content: JSON.stringify({ error: `Tool ${functionName} not allowed or missing.` }),
+                                    });
+                                    continue;
+                                }
+
+                                let args = {};
+                                try {
+                                    if (functionArgs) args = JSON.parse(functionArgs);
+                                } catch (e) {
+                                    logger.log(`Parse args failed: ${e.message}`, 'error');
+                                }
+
+                                // Core: run the tool implementation
+                                const toolResult = await functionToCall(args);
+
+                                // 將工具執行結果寫回對話歷史，準備進入下一個迴圈
+                                safeMessages.push({
+                                    role: 'tool',
+                                    tool_call_id: toolCall.id,
+                                    name: functionName,
+                                    content: typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult),
+                                });
+                            }
+                            // continue 迴圈，讓模型閱讀 Tool 結果後決定下一步
+                        } else {
+                            // 若沒有 tool_calls，代表模型認為資訊已充足，回答完畢，跳出迴圈
+                            break;
+                        }
                     }
+                }
+
+                try {
+                    await runAgentLoop();
                 } catch (err) {
-                    console.error('Stream Process Error:', err);
+                    console.error('Agent Loop Error:', err);
                     logData.status = 'error';
                     logData.error_msg = err.message;
-
-                    // 嘗試通知前端發生錯誤
-                    const errorMsg = `\n\n[系統錯誤: ${err.message}]`;
-                    controller.enqueue(encoder.encode(errorMsg));
+                    controller.enqueue(encoder.encode(`\n\n[系統錯誤: ${err.message}]`));
                 } finally {
-                    const duration = (performance.now() - startTotal).toFixed(0);
-                    logger.logSummary({ usage: accumulatedUsage, duration, steps: [] });
-
+                    logData.tool_used = logData.tool_used.join(',');
+                    const duration = (performance.now() - startTime).toFixed(0);
                     logData.duration_ms = parseInt(duration);
                     logData.response_preview = fullResponse.slice(0, 1000);
 
-                    // 費率常數 (gpt-4o-mini)
                     const PRICE_IN = 0.15;
                     const PRICE_OUT = 0.6;
+                    const cost =
+                        (accumulatedUsage.prompt_tokens / 1e6) * PRICE_IN +
+                        (accumulatedUsage.completion_tokens / 1e6) * PRICE_OUT;
 
-                    // 計算成本
-                    const cost = accumulatedUsage
-                        ? (accumulatedUsage.prompt_tokens / 1e6) * PRICE_IN +
-                          (accumulatedUsage.completion_tokens / 1e6) * PRICE_OUT
-                        : 0;
-
-                    if (accumulatedUsage) {
-                        logData.tokens_input = accumulatedUsage.prompt_tokens;
-                        logData.tokens_output = accumulatedUsage.completion_tokens;
-                    }
-
-                    logData.session_id = sessionId;
+                    logData.tokens_input = accumulatedUsage.prompt_tokens;
+                    logData.tokens_output = accumulatedUsage.completion_tokens;
                     logData.cost_usd = cost;
-                    logData.finish_reason = finishReason;
-                    logData.system_fingerprint = systemFingerprint;
-                    logData.user_agent = userAgent;
 
-                    // streaming is done, isLoading to false (! before uploading log 不然被 supabase 延遲搞過)
                     controller.close();
 
                     try {
-                        // upload logData to supabase (3s timeout)
-                        const timeoutPromise = new Promise((_, reject) =>
-                            setTimeout(() => reject(new Error('Supabase connection timed out')), 3000),
-                        );
-                        const insertPromise = supabaseAdmin.from('ai_inferences').insert(logData);
-                        await Promise.race([insertPromise, timeoutPromise]);
-
-                        logger.log('Log saved to DB successfully', 'success');
-                    } catch (dbError) {
-                        console.error(`[DB Failed]: ${dbError.message}`);
+                        await supabaseClient.from('ai_inferences').insert(logData);
+                        logger.log('Agent execution logged to DB', 'success');
+                    } catch (e) {
+                        console.error('Log write failed:', e);
                     }
                 }
             },
@@ -268,16 +239,7 @@ export async function POST(req) {
             headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         });
     } catch (error) {
-        // 如果連 OpenAI 都還沒呼叫就掛了 (例如 JSON parse error)，在這裡捕獲
         console.error('Fatal Route Error:', error);
-
-        await supabaseAdmin.from('ai_inferences').insert({
-            ...logData,
-            status: 'fatal_error',
-            error_msg: error.message,
-            duration_ms: parseInt((performance.now() - startTotal).toFixed(0)),
-        });
-
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }

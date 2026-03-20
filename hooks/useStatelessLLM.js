@@ -22,7 +22,12 @@ export function useStatelessLLM() {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages, config, sessionId: `card_${sessionId}` }),
+                    body: JSON.stringify({
+                        messages,
+                        config,
+                        sessionId: `card_${sessionId}`,
+                        allowed_tools: ['get_event_border', 'get_event_top100', 'calculate_event_strategy'],
+                    }),
                 });
                 if (!response.ok) throw new Error(response.statusText);
 

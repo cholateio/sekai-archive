@@ -22,6 +22,7 @@ export function useLLM() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ messages, config, sessionId: activeId }),
+                    allowed_tools: [],
                 });
                 if (!response.ok) throw new Error(response.statusText);
 
