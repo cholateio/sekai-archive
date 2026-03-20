@@ -31,15 +31,6 @@ const EXTERNAL_LINKS = [
         tagColor: 'text-pink-400 bg-pink-400/10 border-pink-400/20',
     },
     {
-        id: 'hisekai',
-        title: 'Hisekai API',
-        description: '本站榜線分數資料來源，提供即時榜線 API',
-        url: 'https://api.hisekai.org/',
-        icon: <Calculator className="w-5 h-5 text-yellow-400" />,
-        tag: 'DEV',
-        tagColor: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20',
-    },
-    {
         id: 'wiki',
         title: 'Project Sekai Wiki (JP)',
         description: '本站知識庫來源(預計)，提供詳盡的遊戲攻略',

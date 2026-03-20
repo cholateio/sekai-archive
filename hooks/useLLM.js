@@ -12,7 +12,7 @@ export function useLLM() {
     const { language, character } = useSettings();
 
     const streamResponse = useCallback(
-        async ({ messages }) => {
+        async ({ messages, intent, token }) => {
             setIsLoading(true);
 
             const config = { language, character };
@@ -20,10 +20,15 @@ export function useLLM() {
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages, config, sessionId: activeId }),
-                    allowed_tools: [],
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    body: JSON.stringify({
+                        messages,
+                        config,
+                        sessionId: activeId,
+                        allowed_tools: intent == 'query_sekai' ? ['search_knowledge_base'] : [],
+                    }),
                 });
+                if (response.status === 401 || response.status === 403) throw new Error('安全驗證已過期，請重新發送您的訊息。');
                 if (!response.ok) throw new Error(response.statusText);
 
                 const reader = response.body.getReader();
@@ -55,27 +60,47 @@ export function useLLM() {
     );
 
     const sendMessage = useCallback(
-        async (inputContent) => {
+        async (inputContent, intent, tokenFromJudge) => {
             // prevent system prompt injection attack at frontend
             let messages = currentMessages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: m.content }));
             messages.push({ role: 'user', content: `<user_input>${inputContent}</user_input>` });
 
-            await streamResponse({ messages: messages });
+            await streamResponse({ messages: messages, intent: intent, token: tokenFromJudge });
         },
         [currentMessages, streamResponse],
     );
 
     const regenerate = useCallback(async () => {
-        // 邏輯：拿目前的紀錄，去掉最後一則，不需要等 React 更新 State
         const historyForApi = currentMessages.slice(0, -1);
 
-        deleteLastMessage();
+        const lastUserMsg = historyForApi[historyForApi.length - 1];
+        const queryText = lastUserMsg?.content || '';
 
-        // UI 動作：馬上補一個空的 Assistant 訊息 (讓串流有地方寫入)
+        if (!queryText) {
+            console.error('[Regenerate] 找不到使用者的歷史訊息');
+            return;
+        }
+
+        deleteLastMessage();
         addMessage({ id: Date.now().toString(), role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
 
-        await streamResponse({ messages: historyForApi });
-    }, [currentMessages, addMessage, deleteLastMessage, streamResponse]);
+        setIsLoading(true);
+        try {
+            const judgeRes = await fetch('/api/judge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ queryText }),
+            });
+            if (!judgeRes.ok) throw new Error(`Judge API 發生錯誤: ${judgeRes.status}`);
+            const judgeResult = await judgeRes.json();
 
-    return { isLoading, sendMessage, regenerate };
+            await streamResponse({ messages: historyForApi, intent: judgeResult.intent, token: judgeResult.token });
+        } catch (err) {
+            console.error('[Regenerate Judge Error]', err);
+            updateStreamMessage(`\n\n[系統錯誤]: 無法重新驗證請求，請稍後重試 (${err.message})`);
+            setIsLoading(false);
+        }
+    }, [currentMessages, addMessage, deleteLastMessage, streamResponse, updateStreamMessage]);
+
+    return { isLoading, setIsLoading, sendMessage, regenerate };
 }

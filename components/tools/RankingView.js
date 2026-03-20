@@ -19,12 +19,11 @@ const NOTICE = `
 
 export default function RankingView() {
     const { cards, addCard, updateCard, removeCard } = useMonitor();
-    const { generate, isLoading, result } = useStatelessLLM();
+    const { generate, isLoading, setIsLoading, result } = useStatelessLLM();
     const [input, setInput] = useState('');
     const [activeCardId, setActiveCardId] = useState(null);
     const [showWarning, setShowWarning] = useState(false);
     const [warningMsg, setWarningMsg] = useState('');
-    const [isChecking, setIsChecking] = useState(false); // 專門給 Judge 用的 loading
     const { validateInput } = usePreprocess();
     const bottomRef = useRef(null);
 
@@ -76,7 +75,7 @@ export default function RankingView() {
 
     const handleQuery = async (e) => {
         e?.preventDefault();
-        if (isLoading || isChecking) return;
+        if (isLoading) return;
 
         // Quick check if input is valid
         if (!validateInput(input)) {
@@ -89,7 +88,7 @@ export default function RankingView() {
         setInput('');
 
         // Call judge agent for intent check
-        setIsChecking(true);
+        setIsLoading(true);
         try {
             const judgeRes = await fetch('/api/judge', {
                 method: 'POST',
@@ -101,34 +100,34 @@ export default function RankingView() {
             if (judgeResult.intent != 'query_score') {
                 setWarningMsg(judgeResult.reason); // (Optional: 顯示被拒原因)
                 setShowWarning(true);
-                setIsChecking(false);
+                setIsLoading(false);
                 return; // 直接中斷，不建立卡片
             }
+            setIsLoading(false);
+
+            // Finish judge, creating card and ask for score api
+            const cardTitle = queryText.length > 20 ? queryText.slice(0, 20) + '...' : queryText;
+
+            const newId = Date.now().toString();
+            const newCard = {
+                id: newId,
+                title: cardTitle,
+                prompt: queryText,
+                content: '',
+                isLoading: true,
+                timestamp: new Date(),
+            };
+
+            addCard(newCard);
+            setActiveCardId(newId);
+            generate(queryText, newId, judgeResult.token);
         } catch (err) {
             console.error('[ChatWindow] Router check failed: ', err);
             setWarningMsg('System error, please try again later.');
             setShowWarning(true);
-            setIsChecking(false);
+            setIsLoading(false);
             return; // 直接中斷，不建立卡片
         }
-        setIsChecking(false);
-
-        // Finish judge, creating card and ask for score api
-        const cardTitle = queryText.length > 20 ? queryText.slice(0, 20) + '...' : queryText;
-
-        const newId = Date.now().toString();
-        const newCard = {
-            id: newId,
-            title: cardTitle,
-            prompt: queryText,
-            content: '',
-            isLoading: true,
-            timestamp: new Date(),
-        };
-
-        addCard(newCard);
-        setActiveCardId(newId);
-        generate(queryText, newId);
     };
 
     const handleRefreshCard = (e, card) => {
@@ -266,7 +265,7 @@ export default function RankingView() {
             </div>
 
             <div className="shrink-0 w-full bg-[#212121]">
-                <PromptBox input={input} setInput={setInput} onSubmit={handleQuery} disabled={isLoading || isChecking} />
+                <PromptBox input={input} setInput={setInput} onSubmit={handleQuery} disabled={isLoading} />
             </div>
         </div>
     );

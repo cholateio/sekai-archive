@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai';
 import { NextResponse } from 'next/server';
+import { SignJWT } from 'jose';
 import { DebugLogger } from '@/lib/debug-utils';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { JUDGE_PROMPT } from '@/lib/prompts/judge';
@@ -8,6 +9,8 @@ import { SEKAI_JARGON } from '@/lib/jargon';
 export const runtime = 'edge'; // 設定為 Edge Runtime，啟動速度快，適合輕量級邏輯
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const secretKey = new TextEncoder().encode(process.env.JWT_SECRET || 'fallback-secret');
 
 export async function POST(req) {
     const logger = new DebugLogger('API/Judge');
@@ -52,10 +55,17 @@ export async function POST(req) {
         if (validIntents.includes(intent)) {
             logger.log(`Verdict: (${intent}) (${result.reason})`);
 
+            // 1 minute jwt token for calling chat api
+            const token = await new SignJWT({ authorized_intent: intent })
+                .setProtectedHeader({ alg: 'HS256' })
+                .setIssuedAt()
+                .setExpirationTime('1m')
+                .sign(secretKey);
+
             const duration = logger.timeEnd('Judge_Latency');
             logger.logSummary({ usage: completion.usage, duration: duration });
 
-            return NextResponse.json(result);
+            return NextResponse.json({ ...result, token });
         }
         return NextResponse.json({ intent: 'system_error', reason: 'No valid intent.' });
     } catch (error) {

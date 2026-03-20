@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai';
 import { NextResponse } from 'next/server';
+import { jwtVerify } from 'jose';
 import { createClient } from '@supabase/supabase-js';
 import { DebugLogger } from '@/lib/debug-utils';
 import { allToolDefinitions, toolImplementations } from '@/lib/tools/registry';
@@ -13,13 +14,34 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export const runtime = 'nodejs';
 export const maxDuration = 60; // 允許執行最長 60 秒
 
+const secretKey = new TextEncoder().encode(process.env.JWT_SECRET || 'fallback-secret');
+
 export async function POST(req) {
     const logger = new DebugLogger('API/Chat');
     const startTime = performance.now();
 
-    // Check rate limit (may change to jwt token key in the future)
+    // Check JWT token
+    try {
+        const authHeader = req.headers.get('authorization');
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            logger.log('Missing or invalid Authorization header', 'warn');
+            return NextResponse.json({ error: 'Unauthorized: No token provided.' }, { status: 401 });
+        }
+
+        const token = authHeader.split(' ')[1];
+
+        // jwtVerify 若發現過期或簽章不符，會自動拋出 Error
+        const { payload } = await jwtVerify(token, secretKey);
+        logger.log(`JWT verified for intent: ${payload.authorized_intent}`, 'info');
+    } catch (err) {
+        logger.log(`JWT Verification Failed: ${err.message}`, 'error');
+        return NextResponse.json({ error: 'Forbidden: Invalid or expired token.' }, { status: 403 });
+    }
+
+    // Check rate limit
     const { success, ip } = await checkRateLimit(req, { limit: 5, window: '10 s' });
     const country = req.headers.get('x-vercel-ip-country') || 'unknown';
+    logger.log(`Received request from ${ip} (${country})`, 'info');
 
     if (!success) {
         logger.log(`Rate limit exceeded for IP: ${ip}`, 'warn');
@@ -42,8 +64,7 @@ export async function POST(req) {
         if (allowed_tools && Array.isArray(allowed_tools) && allowed_tools.length > 0) {
             availableTools = allToolDefinitions.filter((tool) => allowed_tools.includes(tool.function.name));
         }
-
-        logger.log(`Received request from ${ip} (${country})`, 'info');
+        logger.log(`Received tools: ${availableTools}`, 'info');
 
         let logData = {
             ip,
@@ -78,7 +99,7 @@ export async function POST(req) {
                 let fullResponse = '';
                 let accumulatedUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
-                const MAX_STEPS = 3; // Max agent steps
+                const MAX_STEPS = 5; // Max agent steps
                 let currentStep = 0;
 
                 async function runAgentLoop() {

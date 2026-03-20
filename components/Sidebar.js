@@ -34,7 +34,7 @@ export default function Sidebar({ isOpen, onClose, currentView, activeToolId, on
 
             if (window.innerWidth < 768) onClose();
         },
-        [onNavigate, prepareNewChat, onClose]
+        [onNavigate, prepareNewChat, onClose],
     );
 
     const handleSessionClick = useCallback(
@@ -43,7 +43,7 @@ export default function Sidebar({ isOpen, onClose, currentView, activeToolId, on
             if (onNavigate) onNavigate('chat');
             if (window.innerWidth < 768) onClose();
         },
-        [switchSession, onNavigate, onClose]
+        [switchSession, onNavigate, onClose],
     );
 
     return (
@@ -51,7 +51,7 @@ export default function Sidebar({ isOpen, onClose, currentView, activeToolId, on
             <div
                 className={cn(
                     'fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity md:hidden',
-                    isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                    isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
                 )}
                 onClick={onClose}
             />
@@ -59,7 +59,7 @@ export default function Sidebar({ isOpen, onClose, currentView, activeToolId, on
             <aside
                 className={cn(
                     'fixed inset-y-0 left-0 z-50 flex w-[280px] flex-col bg-[#171717] font-sans transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:flex',
-                    isOpen ? 'translate-x-0' : '-translate-x-full'
+                    isOpen ? 'translate-x-0' : '-translate-x-full',
                 )}
             >
                 <div className="flex items-center justify-between px-5 pt-8 pb-6">
@@ -117,7 +117,7 @@ export default function Sidebar({ isOpen, onClose, currentView, activeToolId, on
                                 <div
                                     className={cn(
                                         'space-y-1.5',
-                                        section.category !== locales.nav.categories.home && !isExpanded && 'hidden'
+                                        section.category !== locales.nav.categories.home && !isExpanded && 'hidden',
                                     )}
                                 >
                                     {section.items.map((item) => {
@@ -139,7 +139,7 @@ export default function Sidebar({ isOpen, onClose, currentView, activeToolId, on
                     })}
                 </div>
 
-                <div className="border-t border-[#2F2F2F] p-4 bg-[#171717]">
+                <div className="border-t border-[#2F2F2F] p-3 bg-[#171717]">
                     <button
                         onClick={() => {
                             if (onOpenSettings) onOpenSettings();
