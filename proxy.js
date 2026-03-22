@@ -1,25 +1,33 @@
 import { NextResponse } from 'next/server';
 import { ipAddress } from '@vercel/functions';
-import { SignJWT, jwtVerify } from 'jose';
+import { kv } from '@vercel/kv';
+import { Ratelimit } from '@upstash/ratelimit';
 
 // --- 全域安全標頭設定 ---
 const securityHeaders = {
     'X-DNS-Prefetch-Control': 'on',
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-    'X-Frame-Options': 'DENY', // 防止被 iframe 嵌入 (防點擊劫持)
-    'X-Content-Type-Options': 'nosniff', // 防止瀏覽器嗅探 MIME type
+    'X-Frame-Options': 'DENY', 
+    'X-Content-Type-Options': 'nosniff', 
     'Referrer-Policy': 'origin-when-cross-origin',
     'X-XSS-Protection': '1; mode=block',
 };
-
-const SECRET_KEY = new TextEncoder().encode(process.env.RATE_LIMIT_SECRET);
 
 const BLOCKED_IPS = new Set(
     (process.env.BLOCKED_IPS || '')
         .split(',')
         .map((ip) => ip.trim())
-        .filter(Boolean),
+        .filter(Boolean)
 );
+
+const isLocal = process.env.NODE_ENV === 'development' || !process.env.KV_REST_API_URL;
+// 只有在非本地端且有 KV 環境時才初始化 Rate Limiter，避免本地報錯
+const ratelimit = isLocal ? null : new Ratelimit({
+    redis: kv,
+    limiter: Ratelimit.slidingWindow(10, '10 s'),
+    ephemeralCache: new Map(),
+    analytics: true,
+});
 
 function normalizeIp(rawIp) {
     if (!rawIp) return 'unknown';
@@ -28,111 +36,72 @@ function normalizeIp(rawIp) {
     return first;
 }
 
-async function verifyToken(token) {
-    try {
-        const { payload } = await jwtVerify(token, SECRET_KEY);
-        return payload;
-    } catch (err) {
-        return null;
-    }
-}
-
-async function signToken(payload) {
-    return await new SignJWT(payload).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('2h').sign(SECRET_KEY);
-}
-
-export default async function proxy(req) {
-    const rawIp = ipAddress(req) || req.headers.get('x-forwarded-for') || 'unknown';
-    const ip = normalizeIp(rawIp);
-
-    // 黑名單檢查
-    if (BLOCKED_IPS.has(ip)) {
-        return new NextResponse(JSON.stringify({ error: 'Access Denied' }), {
-            status: 403,
-            headers: { 'content-type': 'application/json' },
-        });
-    }
-
-    // 動態路由限流設定 (Route-Based Limits)
-    const path = req.nextUrl.pathname;
-    let limit = 60; // 預設限制
-    let windowSize = 60 * 60 * 1000; // 預設 1 小時
-
-    if (path.startsWith('/api/chat') || path.startsWith('/api/run')) {
-        // Chat API 消耗大，限制更嚴格 (例如：10 秒內 5 次)
-        limit = 5;
-        windowSize = 10 * 1000;
-    } else if (path.startsWith('/api/judge')) {
-        // Judge API 輕量，稍微放寬 (例如：1 分鐘內 30 次)
-        limit = 30;
-        windowSize = 60 * 1000;
-    }
-
-    const token = req.cookies.get('rate_limit_token')?.value;
-    const now = Date.now();
-
-    let usageData = {
-        count: 0,
-        startTime: now,
-        ip: ip,
-        pathType: path.split('/')[2] || 'general', // 將路徑類型也綁入 Token 避免跨路由共用
-    };
-
-    if (token) {
-        const payload = await verifyToken(token);
-        // 確保 IP 和請求的路徑類型一致
-        if (payload && payload.ip === ip && payload.pathType === usageData.pathType) {
-            usageData = {
-                count: Number(payload.count),
-                startTime: Number(payload.startTime),
-                ip: payload.ip,
-                pathType: payload.pathType,
-            };
-        }
-    }
-
-    if (now - usageData.startTime > windowSize) {
-        usageData.count = 1;
-        usageData.startTime = now;
-    } else {
-        usageData.count++;
-    }
-
-    if (usageData.count > limit) {
-        console.log(`[RateLimit] IP ${ip} exceeded limit for ${path}: ${usageData.count}/${limit}`);
-        return new NextResponse(
-            JSON.stringify({
-                error: 'Too Many Requests',
-                retryAfter: Math.ceil((usageData.startTime + windowSize - now) / 1000),
-            }),
-            {
-                status: 429,
-                headers: { 'content-type': 'application/json' },
-            },
-        );
-    }
-
-    const newToken = await signToken(usageData);
-
-    // 準備回應並套用安全標頭
-    const res = NextResponse.next();
-
-    // 寫入 Security Headers
+function applySecurityHeaders(response) {
     Object.entries(securityHeaders).forEach(([key, value]) => {
-        res.headers.set(key, value);
+        response.headers.set(key, value);
     });
+    return response;
+}
 
-    res.cookies.set('rate_limit_token', newToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        maxAge: Math.ceil(windowSize / 1000) * 2, // 根據不同路由動態調整 Cookie 壽命
-    });
+export async function middleware(req) {
+    try {
+        const rawIp = ipAddress(req) || req.headers.get('x-forwarded-for') || 'unknown';
+        const ip = normalizeIp(rawIp);
 
-    res.headers.set('X-RateLimit-Limit', limit.toString());
-    res.headers.set('X-RateLimit-Remaining', (limit - usageData.count).toString());
+        // 黑名單阻擋
+        if (BLOCKED_IPS.has(ip)) {
+            const res = new NextResponse(JSON.stringify({ error: 'Access Denied' }), {
+                status: 403,
+                headers: { 'content-type': 'application/json' },
+            });
+            return applySecurityHeaders(res);
+        }
 
-    return res;
+        const path = req.nextUrl.pathname;
+        if (!path.startsWith('/api/chat') && !path.startsWith('/api/judge')) {
+            const res = NextResponse.next();
+            return applySecurityHeaders(res);
+        }
+
+        if (isLocal || !ratelimit) {
+            const res = NextResponse.next();
+            return applySecurityHeaders(res);
+        }
+
+        // 正式環境的限流檢查
+        const identifier = `ratelimit:${ip}:${path}`;
+        const { success, limit, remaining, reset } = await ratelimit.limit(identifier);
+
+        if (!success) {
+            console.warn(`[RateLimit] Blocked IP: ${ip} on ${path}`);
+            const res = new NextResponse(
+                JSON.stringify({
+                    error: 'Too Many Requests',
+                    retryAfter: Math.ceil((reset - Date.now()) / 1000), 
+                }),
+                {
+                    status: 429,
+                    headers: {
+                        'content-type': 'application/json',
+                        'X-RateLimit-Limit': limit.toString(),
+                        'X-RateLimit-Remaining': remaining.toString(),
+                        'X-RateLimit-Reset': reset.toString(),
+                    },
+                }
+            );
+            return applySecurityHeaders(res);
+        }
+
+        const res = NextResponse.next();
+        res.headers.set('X-RateLimit-Limit', limit.toString());
+        res.headers.set('X-RateLimit-Remaining', remaining.toString());
+        return applySecurityHeaders(res);
+
+    } catch (error) {
+        console.error('[Middleware Error] Rate limit execution failed:', error);
+        const res = NextResponse.next();
+        return applySecurityHeaders(res);
+    }
 }
 
 export const config = {
