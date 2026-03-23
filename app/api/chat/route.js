@@ -53,7 +53,7 @@ export async function POST(req) {
             user_agent: userAgent,
             query_content: queryContent.slice(0, 1000),
             favorite: config?.character || 'Unknown',
-            model_used: 'gpt-4o-mini',
+            model_used: 'gpt-4.1-mini',
             tool_used: [],
             status: 'success',
             tokens_input: 0,
@@ -97,7 +97,7 @@ export async function POST(req) {
                         currentStep === 1 ? sendStreamEvent('status', '思考中...') : sendStreamEvent('status', '彙整數據中...');
 
                         const runner = await openai.chat.completions.create({
-                            model: 'gpt-4o-mini',
+                            model: 'gpt-4.1-mini',
                             messages: safeMessages,
                             stream: true,
                             stream_options: { include_usage: true },
