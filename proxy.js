@@ -2,13 +2,16 @@ import { NextResponse } from 'next/server';
 import { ipAddress } from '@vercel/functions';
 import { kv } from '@vercel/kv';
 import { Ratelimit } from '@upstash/ratelimit';
+import { DebugLogger } from '@/lib/debug-utils';
+
+const logger = new DebugLogger('Proxy');
 
 // --- 全域安全標頭設定 ---
 const securityHeaders = {
     'X-DNS-Prefetch-Control': 'on',
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-    'X-Frame-Options': 'DENY', 
-    'X-Content-Type-Options': 'nosniff', 
+    'X-Frame-Options': 'DENY',
+    'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'origin-when-cross-origin',
     'X-XSS-Protection': '1; mode=block',
 };
@@ -17,17 +20,19 @@ const BLOCKED_IPS = new Set(
     (process.env.BLOCKED_IPS || '')
         .split(',')
         .map((ip) => ip.trim())
-        .filter(Boolean)
+        .filter(Boolean),
 );
 
 const isLocal = process.env.NODE_ENV === 'development' || !process.env.KV_REST_API_URL;
-// 只有在非本地端且有 KV 環境時才初始化 Rate Limiter，避免本地報錯
-const ratelimit = isLocal ? null : new Ratelimit({
-    redis: kv,
-    limiter: Ratelimit.slidingWindow(10, '10 s'),
-    ephemeralCache: new Map(),
-    analytics: true,
-});
+
+const ratelimit = isLocal
+    ? null
+    : new Ratelimit({
+          redis: kv,
+          limiter: Ratelimit.slidingWindow(10, '10 s'),
+          ephemeralCache: new Map(),
+          analytics: true,
+      });
 
 function normalizeIp(rawIp) {
     if (!rawIp) return 'unknown';
@@ -43,7 +48,7 @@ function applySecurityHeaders(response) {
     return response;
 }
 
-export async function middleware(req) {
+export async function proxy(req) {
     try {
         const rawIp = ipAddress(req) || req.headers.get('x-forwarded-for') || 'unknown';
         const ip = normalizeIp(rawIp);
@@ -73,11 +78,11 @@ export async function middleware(req) {
         const { success, limit, remaining, reset } = await ratelimit.limit(identifier);
 
         if (!success) {
-            console.warn(`[RateLimit] Blocked IP: ${ip} on ${path}`);
+            logger.log(`[RateLimit] Blocked IP: ${ip} on ${path}`, 'warn');
             const res = new NextResponse(
                 JSON.stringify({
                     error: 'Too Many Requests',
-                    retryAfter: Math.ceil((reset - Date.now()) / 1000), 
+                    retryAfter: Math.ceil((reset - Date.now()) / 1000),
                 }),
                 {
                     status: 429,
@@ -87,7 +92,7 @@ export async function middleware(req) {
                         'X-RateLimit-Remaining': remaining.toString(),
                         'X-RateLimit-Reset': reset.toString(),
                     },
-                }
+                },
             );
             return applySecurityHeaders(res);
         }
@@ -96,9 +101,8 @@ export async function middleware(req) {
         res.headers.set('X-RateLimit-Limit', limit.toString());
         res.headers.set('X-RateLimit-Remaining', remaining.toString());
         return applySecurityHeaders(res);
-
     } catch (error) {
-        console.error('[Middleware Error] Rate limit execution failed:', error);
+        logger.log('[Middleware Error] Rate limit execution failed:', 'error');
         const res = NextResponse.next();
         return applySecurityHeaders(res);
     }

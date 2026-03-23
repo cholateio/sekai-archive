@@ -12,7 +12,7 @@ export function useLLM() {
     const { language, character } = useSettings();
 
     const streamResponse = useCallback(
-        async ({ messages, intent, token }) => {
+        async ({ messages, intent }) => {
             setIsLoading(true);
 
             const config = { language, character };
@@ -20,7 +20,7 @@ export function useLLM() {
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         messages,
                         config,
@@ -28,7 +28,6 @@ export function useLLM() {
                         allowed_tools: intent == 'query_sekai' ? ['search_knowledge_base'] : [],
                     }),
                 });
-                if (response.status === 401 || response.status === 403) throw new Error('安全驗證已過期，請重新發送您的訊息。');
                 if (!response.ok) throw new Error(response.statusText);
 
                 const reader = response.body.getReader();
@@ -60,12 +59,12 @@ export function useLLM() {
     );
 
     const sendMessage = useCallback(
-        async (inputContent, intent, tokenFromJudge) => {
+        async (inputContent, intent) => {
             // prevent system prompt injection attack at frontend
             let messages = currentMessages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: m.content }));
             messages.push({ role: 'user', content: `<user_input>${inputContent}</user_input>` });
 
-            await streamResponse({ messages: messages, intent: intent, token: tokenFromJudge });
+            await streamResponse({ messages: messages, intent: intent });
         },
         [currentMessages, streamResponse],
     );
@@ -82,7 +81,6 @@ export function useLLM() {
         }
 
         deleteLastMessage();
-        addMessage({ id: Date.now().toString(), role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
 
         setIsLoading(true);
         try {
@@ -94,7 +92,8 @@ export function useLLM() {
             if (!judgeRes.ok) throw new Error(`Judge API 發生錯誤: ${judgeRes.status}`);
             const judgeResult = await judgeRes.json();
 
-            await streamResponse({ messages: historyForApi, intent: judgeResult.intent, token: judgeResult.token });
+            addMessage({ id: Date.now().toString(), role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
+            await streamResponse({ messages: historyForApi, intent: judgeResult.intent });
         } catch (err) {
             console.error('[Regenerate Judge Error]', err);
             updateStreamMessage(`\n\n[系統錯誤]: 無法重新驗證請求，請稍後重試 (${err.message})`);

@@ -10,35 +10,18 @@ export function useStatelessLLM() {
     const { language, character } = useSettings();
 
     const generate = useCallback(
-        async (message, sessionId = null, token = null) => {
+        async (message, sessionId = null) => {
             setIsLoading(true);
             setResult(''); // 清空舊結果
 
             const config = { language, character };
-
-            if (!token) {
-                try {
-                    const judgeRes = await fetch('/api/judge', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ queryText: message.trim() }),
-                    });
-                    const judgeResult = await judgeRes.json();
-                    token = judgeResult.token;
-                } catch (err) {
-                    console.error('[Token Refresh Error]', err);
-                    setResult(`\n\n[系統錯誤]: 無法重新驗證請求，請稍後重試 (${err.message})`);
-                    setIsLoading(false);
-                    return; // 中斷執行
-                }
-            }
 
             try {
                 const messages = [{ role: 'user', content: message }];
 
                 const response = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         messages,
                         config,
@@ -46,7 +29,6 @@ export function useStatelessLLM() {
                         allowed_tools: ['get_event_border', 'get_event_top100', 'calculate_event_strategy'],
                     }),
                 });
-                if (response.status === 401 || response.status === 403) throw new Error('安全驗證已過期，請重新發送您的請求。');
                 if (!response.ok) throw new Error(response.statusText);
 
                 const reader = response.body.getReader();

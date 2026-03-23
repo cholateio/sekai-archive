@@ -10,11 +10,11 @@ import { useMonitor } from '@/context/MonitorContext';
 import { cn } from '@/lib/utils';
 import PromptBox from '../PromptBox';
 import WarningModal from '../WarningModal';
+import IntroModal from '../IntroModal';
 
 const NOTICE = `
 - 此區問答不會參考上下文，詢問時請打出完整問題。
-- 此區追分/防守分析僅支援 100 名內，其餘名次僅能查詢分數。
-- 玩家首次進 T100 時，會判讀他剛上 T100 的總分和時速，數值可能偏大，非數據錯誤。
+- 此區時速分析僅支援 100 名內，其餘名次僅能查詢分數。
 `;
 
 export default function RankingView() {
@@ -120,7 +120,7 @@ export default function RankingView() {
 
             addCard(newCard);
             setActiveCardId(newId);
-            generate(queryText, newId, judgeResult.token);
+            generate(queryText, newId);
         } catch (err) {
             console.error('[ChatWindow] Router check failed: ', err);
             setWarningMsg('System error, please try again later.');
@@ -158,6 +158,7 @@ export default function RankingView() {
 
     return (
         <div className="flex flex-col h-full w-full relative bg-[#212121]">
+            <IntroModal />
             <WarningModal isOpen={showWarning} onClose={() => setShowWarning(false)} message={warningMsg} />
             {/* --- 內容顯示區 (Top) --- */}
             <div className="flex-1 overflow-y-auto px-4 pt-4 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
@@ -197,19 +198,11 @@ export default function RankingView() {
                                             </span>
                                         </div>
 
-                                        {/* Actions (Hover Only) */}
-                                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button
-                                                onClick={(e) => handleRefreshCard(e, card)}
-                                                disabled={isLoading}
-                                                className="text-gray-500 hover:text-cyan-400 transition-colors"
-                                                title="Refresh"
-                                            >
-                                                <RefreshCw className="h-3.5 w-3.5" />
-                                            </button>
+                                        {/* Actions */}
+                                        <div className="flex items-center gap-2">
                                             <button
                                                 onClick={(e) => handleDeleteCard(e, card.id)}
-                                                className="text-gray-500 hover:text-red-400 transition-colors"
+                                                className="text-gray-400 hover:text-red-400 transition-colors"
                                                 title="Close"
                                             >
                                                 <X className="h-3.5 w-3.5" />
@@ -251,8 +244,16 @@ export default function RankingView() {
 
                                     {/* Footer Timestamp */}
                                     {card.timestamp && !card.isLoading && (
-                                        <div className="mt-3 shrink-0 text-[10px] text-gray-200 font-mono text-right opacity-60">
+                                        <div className="mt-4 shrink-0 text-[10px] text-gray-200 font-mono text-right opacity-80">
                                             {new Date(card.timestamp).toLocaleTimeString()}
+                                            <button
+                                                onClick={(e) => handleRefreshCard(e, card)}
+                                                disabled={isLoading}
+                                                className="ml-4 text-gray-400 hover:text-cyan-400 transition-colors"
+                                                title="Refresh"
+                                            >
+                                                <RefreshCw className="h-3.5 w-3.5" />
+                                            </button>
                                         </div>
                                     )}
                                 </div>

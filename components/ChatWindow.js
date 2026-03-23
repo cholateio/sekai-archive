@@ -62,7 +62,7 @@ export default function ChatWindow() {
             } else {
                 // Create an empty assistant message in the UI and prepare to receive the stream
                 addMessage({ ...robotMessage, content: '' });
-                sendMessage(queryText, judgeResult.intent, judgeResult.token);
+                sendMessage(queryText, judgeResult.intent);
             }
         } catch (err) {
             console.error('[ChatWindow] Router check failed: ', err);

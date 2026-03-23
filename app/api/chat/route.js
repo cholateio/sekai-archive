@@ -1,11 +1,10 @@
 import { OpenAI } from 'openai';
 import { NextResponse } from 'next/server';
-import { jwtVerify } from 'jose';
+import { ipAddress } from '@vercel/functions';
 import { createClient } from '@supabase/supabase-js';
 import { DebugLogger } from '@/lib/debug-utils';
 import { allToolDefinitions, toolImplementations } from '@/lib/tools/registry';
 import { generateSystemPrompt } from '@/lib/prompts/system';
-import { checkRateLimit } from '@/lib/rate-limit';
 
 const supabaseClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
@@ -14,39 +13,19 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export const runtime = 'nodejs';
 export const maxDuration = 60; // 允許執行最長 60 秒
 
-const secretKey = new TextEncoder().encode(process.env.JWT_SECRET || 'fallback-secret');
+function normalizeIp(rawIp) {
+    if (!rawIp) return 'unknown';
+    const first = rawIp.split(',')[0].trim();
+    if (first.startsWith('::ffff:')) return first.substring('::ffff:'.length);
+    return first;
+}
 
 export async function POST(req) {
     const logger = new DebugLogger('API/Chat');
     const startTime = performance.now();
-
-    // Check JWT token
-    try {
-        const authHeader = req.headers.get('authorization');
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            logger.log('Missing or invalid Authorization header', 'warn');
-            return NextResponse.json({ error: 'Unauthorized: No token provided.' }, { status: 401 });
-        }
-
-        const token = authHeader.split(' ')[1];
-
-        // jwtVerify 若發現過期或簽章不符，會自動拋出 Error
-        const { payload } = await jwtVerify(token, secretKey);
-        logger.log(`JWT verified for intent: ${payload.authorized_intent}`, 'info');
-    } catch (err) {
-        logger.log(`JWT Verification Failed: ${err.message}`, 'error');
-        return NextResponse.json({ error: 'Forbidden: Invalid or expired token.' }, { status: 403 });
-    }
-
-    // Check rate limit
-    const { success, ip } = await checkRateLimit(req, { limit: 5, window: '10 s' });
+    const rawIp = ipAddress(req) || req.headers.get('x-forwarded-for') || 'unknown';
+    const ip = normalizeIp(rawIp);
     const country = req.headers.get('x-vercel-ip-country') || 'unknown';
-    logger.log(`Received request from ${ip} (${country})`, 'info');
-
-    if (!success) {
-        logger.log(`Rate limit exceeded for IP: ${ip}`, 'warn');
-        return NextResponse.json({ error: 'Too many requests.' }, { status: 429 });
-    }
 
     try {
         const requestData = await req.json();
@@ -64,7 +43,8 @@ export async function POST(req) {
         if (allowed_tools && Array.isArray(allowed_tools) && allowed_tools.length > 0) {
             availableTools = allToolDefinitions.filter((tool) => allowed_tools.includes(tool.function.name));
         }
-        logger.log(`Received tools: ${availableTools}`, 'info');
+        logger.log(`Chating input: "${queryContent.slice(0, 20)}${queryContent.length > 20 ? '...' : ''}"`, 'info');
+        logger.log(`Received tools: ${allowed_tools}`, 'info');
 
         let logData = {
             ip,
@@ -216,6 +196,7 @@ export async function POST(req) {
                             // continue 迴圈，讓模型閱讀 Tool 結果後決定下一步
                         } else {
                             // 若沒有 tool_calls，代表模型認為資訊已充足，回答完畢，跳出迴圈
+                            logger.log('Sufficient information, complete answer.', 'info');
                             break;
                         }
                     }
@@ -224,7 +205,7 @@ export async function POST(req) {
                 try {
                     await runAgentLoop();
                 } catch (err) {
-                    console.error('Agent Loop Error:', err);
+                    logger.log(`Agent Loop Error: ${err.message}`, 'error');
                     logData.status = 'error';
                     logData.error_msg = err.message;
                     controller.enqueue(encoder.encode(`\n\n[系統錯誤: ${err.message}]`));
@@ -250,7 +231,7 @@ export async function POST(req) {
                         await supabaseClient.from('ai_inferences').insert(logData);
                         logger.log('Agent execution logged to DB', 'success');
                     } catch (e) {
-                        console.error('Log write failed:', e);
+                        logger.log(`Log write failed: ${e.message}`, 'error');
                     }
                 }
             },
@@ -260,7 +241,7 @@ export async function POST(req) {
             headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         });
     } catch (error) {
-        console.error('Fatal Route Error:', error);
+        logger.log(`Fatal Route Error: ${error.message}`, 'error');
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }
