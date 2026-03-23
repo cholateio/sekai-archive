@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ipAddress } from '@vercel/functions';
-import { kv } from '@vercel/kv';
+import { Redis } from '@upstash/redis';
 import { Ratelimit } from '@upstash/ratelimit';
 import { DebugLogger } from '@/lib/debug-utils';
 
@@ -23,12 +23,14 @@ const BLOCKED_IPS = new Set(
         .filter(Boolean),
 );
 
-const isLocal = process.env.NODE_ENV === 'development' || !process.env.KV_REST_API_URL;
+const isLocal = process.env.NODE_ENV === 'development' || !process.env.REDIS_URL;
+// Initialize Redis
+const redis = Redis.fromEnv();
 
 const ratelimit = isLocal
     ? null
     : new Ratelimit({
-          redis: kv,
+          redis: redis,
           limiter: Ratelimit.slidingWindow(10, '10 s'),
           ephemeralCache: new Map(),
           analytics: true,
@@ -55,6 +57,7 @@ export async function proxy(req) {
 
         // 黑名單阻擋
         if (BLOCKED_IPS.has(ip)) {
+            logger.log(`[Security] Blocked access from blacklisted IP: ${ip}`, 'warn');
             const res = new NextResponse(JSON.stringify({ error: 'Access Denied' }), {
                 status: 403,
                 headers: { 'content-type': 'application/json' },
@@ -102,7 +105,7 @@ export async function proxy(req) {
         res.headers.set('X-RateLimit-Remaining', remaining.toString());
         return applySecurityHeaders(res);
     } catch (error) {
-        logger.log('[Middleware Error] Rate limit execution failed:', 'error');
+        logger.log(`[Middleware Error] Rate limit execution failed: ${error.message}`, 'error');
         const res = NextResponse.next();
         return applySecurityHeaders(res);
     }
