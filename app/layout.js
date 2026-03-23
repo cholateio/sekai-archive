@@ -1,6 +1,7 @@
 import { Geist, Geist_Mono } from 'next/font/google';
 import { cookies } from 'next/headers';
 import { Analytics } from '@vercel/analytics/next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import { SettingsProvider } from '@/context/SettingsContext';
 import { ChatProvider } from '../context/ChatContext';
 import { RankingProvider } from '@/context/RankContext';
@@ -42,6 +43,7 @@ export default async function RootLayout({ children }) {
                             <MonitorProvider>
                                 {children}
                                 <Analytics />
+                                <SpeedInsights />
                             </MonitorProvider>
                         </RankingProvider>
                     </ChatProvider>
