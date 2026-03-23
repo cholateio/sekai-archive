@@ -2,6 +2,9 @@ import { Geist, Geist_Mono } from 'next/font/google';
 import { cookies } from 'next/headers';
 import { Analytics } from '@vercel/analytics/next';
 import { SettingsProvider } from '@/context/SettingsContext';
+import { ChatProvider } from '../context/ChatContext';
+import { RankingProvider } from '@/context/RankContext';
+import { MonitorProvider } from '@/context/MonitorContext';
 import './globals.css';
 
 const geistSans = Geist({
@@ -34,8 +37,14 @@ export default async function RootLayout({ children }) {
         <html lang="en">
             <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
                 <SettingsProvider initialSettings={initialSettings}>
-                    {children}
-                    <Analytics />
+                    <ChatProvider>
+                        <RankingProvider>
+                            <MonitorProvider>
+                                {children}
+                                <Analytics />
+                            </MonitorProvider>
+                        </RankingProvider>
+                    </ChatProvider>
                 </SettingsProvider>
             </body>
         </html>

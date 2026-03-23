@@ -25,7 +25,7 @@ const BLOCKED_IPS = new Set(
 
 const isLocal = process.env.NODE_ENV === 'development' || !process.env.REDIS_URL;
 // Initialize Redis
-const redis = Redis.fromEnv();
+const redis = isLocal ? null : Redis.fromEnv();
 
 const ratelimit = isLocal
     ? null
@@ -35,6 +35,34 @@ const ratelimit = isLocal
           ephemeralCache: new Map(),
           analytics: true,
       });
+
+// Turnstile checking whether user is robot
+async function verifyTurnstile(token, ip) {
+    const secret = process.env.TURNSTILE_SECRET_KEY;
+    if (!secret) {
+        logger.log('[Turnstile] Secret key missing, skipping validation', 'warn');
+        return true;
+    }
+
+    try {
+        const formData = new FormData();
+        formData.append('secret', secret);
+        formData.append('response', token);
+        formData.append('remoteip', ip); // 帶入客戶端 IP 可提升 Cloudflare 的判斷準確度
+
+        // 直接透過 fetch 呼叫 Cloudflare 驗證節點 (Edge 友善)
+        const result = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            body: formData,
+            method: 'POST',
+        });
+
+        const outcome = await result.json();
+        return outcome.success;
+    } catch (err) {
+        logger.log(`[Turnstile Error] Validation failed: ${err.message}`, 'error');
+        return true;
+    }
+}
 
 function normalizeIp(rawIp) {
     if (!rawIp) return 'unknown';
@@ -65,19 +93,56 @@ export async function proxy(req) {
             return applySecurityHeaders(res);
         }
 
+        // 非部屬網頁來源觸發阻擋
+        if (!isLocal) {
+            const referer = req.headers.get('referer') || '';
+            const origin = req.headers.get('origin') || '';
+            const allowedDomain = 'sekai-archive.vercel.app';
+
+            if (!referer.includes(allowedDomain) && !origin.includes(allowedDomain)) {
+                logger.log(`[Security] Blocked cross-origin request from IP: ${ip}`, 'warn');
+                return new NextResponse(JSON.stringify({ error: 'Invalid Origin' }), { status: 403 });
+            }
+        }
+
         const path = req.nextUrl.pathname;
         if (!path.startsWith('/api/chat') && !path.startsWith('/api/judge')) {
             const res = NextResponse.next();
             return applySecurityHeaders(res);
         }
 
+        // Turnstile 機器人判斷 (先關掉)
+        // if (!isLocal) {
+        //     // 預期前端會在 Header 帶上 x-turnstile-token
+        //     const turnstileToken = req.headers.get('x-turnstile-token');
+
+        //     if (!turnstileToken) {
+        //         logger.log(`[Security] Missing Turnstile token from IP: ${ip}`, 'warn');
+        //         const res = new NextResponse(JSON.stringify({ error: 'Turnstile token is required' }), {
+        //             status: 403,
+        //             headers: { 'content-type': 'application/json' },
+        //         });
+        //         return applySecurityHeaders(res);
+        //     }
+
+        //     const isHuman = await verifyTurnstile(turnstileToken, ip);
+        //     if (!isHuman) {
+        //         logger.log(`[Security] Bot detected by Turnstile from IP: ${ip}`, 'warn');
+        //         const res = new NextResponse(JSON.stringify({ error: 'Bot verification failed' }), {
+        //             status: 403,
+        //             headers: { 'content-type': 'application/json' },
+        //         });
+        //         return applySecurityHeaders(res);
+        //     }
+        // }
+
+        // 確認真人玩家也沒有濫用 API (isLocal 略過)
         if (isLocal || !ratelimit) {
             const res = NextResponse.next();
             return applySecurityHeaders(res);
         }
 
-        // 正式環境的限流檢查
-        const identifier = `ratelimit:${ip}:${path}`;
+        const identifier = `ratelimit:${ip}:${path}`; // make sure different api has different limit counter
         const { success, limit, remaining, reset } = await ratelimit.limit(identifier);
 
         if (!success) {

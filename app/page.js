@@ -1,9 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { ChatProvider } from '../context/ChatContext';
-import { RankingProvider } from '@/context/RankContext';
-import { MonitorProvider } from '@/context/MonitorContext';
 import Sidebar from '../components/Sidebar';
 import MobileHeader from '../components/MobileHeader';
 import ChatWindow from '../components/ChatWindow';
@@ -37,30 +34,24 @@ export default function Home() {
     };
 
     return (
-        <ChatProvider>
-            <RankingProvider>
-                <MonitorProvider>
-                    <main className="flex h-dvh w-full overflow-hidden bg-[#212121]">
-                        <Sidebar
-                            isOpen={isSidebarOpen}
-                            onClose={() => setIsSidebarOpen(false)}
-                            currentView={activeView}
-                            activeToolId={activeToolId}
-                            onNavigate={handleNavigate}
-                            onOpenSettings={() => setIsSettingsOpen(true)}
-                        />
+        <main className="flex h-dvh w-full overflow-hidden bg-[#212121]">
+            <Sidebar
+                isOpen={isSidebarOpen}
+                onClose={() => setIsSidebarOpen(false)}
+                currentView={activeView}
+                activeToolId={activeToolId}
+                onNavigate={handleNavigate}
+                onOpenSettings={() => setIsSettingsOpen(true)}
+            />
 
-                        <div className="flex-1 flex flex-col h-full w-full relative">
-                            <MobileHeader onOpen={() => setIsSidebarOpen(true)} />
+            <div className="flex-1 flex flex-col h-full w-full relative">
+                <MobileHeader onOpen={() => setIsSidebarOpen(true)} />
 
-                            {renderContent()}
+                {renderContent()}
 
-                            {/* Setting button at the end */}
-                            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-                        </div>
-                    </main>
-                </MonitorProvider>
-            </RankingProvider>
-        </ChatProvider>
+                {/* Setting button at the end */}
+                <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+            </div>
+        </main>
     );
 }

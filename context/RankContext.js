@@ -97,7 +97,6 @@ export function RankingProvider({ children }) {
     const fetchRankings = async () => {
         try {
             setLoading(true);
-            console.log('Context: 開始更新榜線資料...');
 
             // Get the current event info first
             const eventData = await getLiveBorder();
