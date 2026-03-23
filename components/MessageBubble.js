@@ -51,7 +51,7 @@ const CodeBlock = ({ inline, className, children, ...props }) => {
     );
 };
 
-function MessageBubble({ message, isLast, isLoading, onRegenerate, onDelete }) {
+function MessageBubble({ message, isLast, isLoading, agentState, onRegenerate, onDelete }) {
     const isAssistant = message.role === 'assistant';
     const isThinking = isAssistant && isLast && isLoading && !message.content;
 
@@ -71,14 +71,17 @@ function MessageBubble({ message, isLast, isLoading, onRegenerate, onDelete }) {
                         'rounded-xl px-4 py-3 text-[16px] leading-7 overflow-hidden',
                         !isAssistant
                             ? 'bg-[#3F3F46] text-white'
-                            : 'bg-transparent text-gray-100 px-0 py-0 w-full prose prose-invert max-w-none prose-p:leading-7 prose-pre:my-2 prose-pre:bg-[#1e1e1e] prose-pre:rounded-lg'
+                            : 'bg-transparent text-gray-100 px-0 py-0 w-full prose prose-invert max-w-none prose-p:leading-7 prose-pre:my-2 prose-pre:bg-[#1e1e1e] prose-pre:rounded-lg',
                     )}
                 >
                     {isThinking ? (
-                        <div className="flex items-center gap-1.5 h-7 px-2">
-                            <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.3s]"></span>
-                            <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.15s]"></span>
-                            <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce"></span>
+                        <div className="flex items-center gap-3 h-7 px-2 text-gray-400 text-sm font-medium">
+                            <div className="flex items-center gap-1.5">
+                                <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.3s]"></span>
+                                <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.15s]"></span>
+                                <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce"></span>
+                            </div>
+                            <span className="animate-pulse">{agentState || '思考中...'}</span>
                         </div>
                     ) : !isAssistant ? (
                         message.content
@@ -100,7 +103,7 @@ function MessageBubble({ message, isLast, isLoading, onRegenerate, onDelete }) {
                                     disabled={isLoading}
                                     className={cn(
                                         'p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-[#3F3F46]',
-                                        isLoading && 'animate-spin cursor-not-allowed'
+                                        isLoading && 'animate-spin cursor-not-allowed',
                                     )}
                                 >
                                     <RefreshCw className="w-4 h-4" />

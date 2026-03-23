@@ -7,6 +7,7 @@ import { useSettings } from '@/context/SettingsContext';
 // 它的工作是「收集材料」。它負責去 React 的各個角落（Context, State）把資料抓過來。
 export function useLLM() {
     const [isLoading, setIsLoading] = useState(false);
+    const [agentState, setAgentState] = useState(null);
 
     const { addMessage, updateStreamMessage, currentMessages, deleteLastMessage, activeId } = useChat();
     const { language, character } = useSettings();
@@ -14,6 +15,7 @@ export function useLLM() {
     const streamResponse = useCallback(
         async ({ messages, intent }) => {
             setIsLoading(true);
+            setAgentState('思考中...');
 
             const config = { language, character };
 
@@ -32,14 +34,49 @@ export function useLLM() {
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-                let done = false;
+                let buffer = '';
 
-                while (!done) {
+                while (true) {
                     const { value, done: doneReading } = await reader.read();
-                    done = doneReading;
+                    if (doneReading) break;
+
                     if (value) {
-                        const chunkValue = decoder.decode(value, { stream: true });
-                        updateStreamMessage(chunkValue);
+                        buffer += decoder.decode(value, { stream: true });
+                        const chunks = buffer.split('\n');
+
+                        buffer = chunks.pop();
+
+                        for (const chunk of chunks) {
+                            if (!chunk.trim()) continue;
+
+                            try {
+                                const parsed = JSON.parse(chunk);
+
+                                switch (parsed.type) {
+                                    case 'text':
+                                        updateStreamMessage(parsed.payload);
+                                        setAgentState(null); // 開始吐出文字，隱藏思考狀態
+                                        break;
+                                    case 'status':
+                                        setAgentState(parsed.payload);
+                                        break;
+                                    case 'tool_start':
+                                        const toolMap = { search_knowledge_base: '搜尋知識庫' };
+                                        setAgentState(`正在${toolMap[parsed.payload.name] || '執行工具'}...`);
+                                        break;
+                                    case 'tool_end':
+                                        setAgentState('統整分析中...');
+                                        break;
+                                    case 'error':
+                                        console.error('[Backend Error]:', parsed.payload);
+                                        updateStreamMessage(`\n\n[系統錯誤]: ${parsed.payload}`);
+                                        setAgentState('發生錯誤');
+                                        break;
+                                }
+                            } catch (err) {
+                                console.error('Failed to parse NDJSON chunk:', err, chunk);
+                            }
+                        }
                     }
                 }
             } catch (err) {
@@ -53,6 +90,7 @@ export function useLLM() {
                 }
             } finally {
                 setIsLoading(false);
+                setAgentState(null);
             }
         },
         [updateStreamMessage, activeId, language, character],
@@ -101,5 +139,5 @@ export function useLLM() {
         }
     }, [currentMessages, addMessage, deleteLastMessage, streamResponse, updateStreamMessage]);
 
-    return { isLoading, setIsLoading, sendMessage, regenerate };
+    return { isLoading, agentState, setIsLoading, sendMessage, regenerate };
 }

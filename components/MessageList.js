@@ -5,7 +5,7 @@ import WelcomeScreen from './WelcomeScreen';
 import MessageBubble from './MessageBubble';
 import { useAutoScroll } from '@/hooks/useAutoScroll';
 
-export default function MessageList({ messages, isLoading, onRegenerate }) {
+export default function MessageList({ messages, isLoading, agentState, onRegenerate }) {
     const { scrollRef, bottomRef } = useAutoScroll(messages);
     const { deleteMessage } = useChat();
 
@@ -25,6 +25,7 @@ export default function MessageList({ messages, isLoading, onRegenerate }) {
                         message={m}
                         isLast={i === messages.length - 1}
                         isLoading={isLoading}
+                        agentState={agentState}
                         onRegenerate={onRegenerate}
                         onDelete={() => deleteMessage(i)}
                     />

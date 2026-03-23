@@ -82,12 +82,19 @@ export async function POST(req) {
                 const MAX_STEPS = 5; // Max agent steps
                 let currentStep = 0;
 
+                // 這樣前端就能透過 parsed.type 來區分這包資料是文字還是狀態更新
+                const sendStreamEvent = (type, payload) => {
+                    const chunk = JSON.stringify({ type, payload }) + '\n';
+                    controller.enqueue(encoder.encode(chunk));
+                };
+
                 async function runAgentLoop() {
                     while (currentStep < MAX_STEPS) {
                         currentStep++;
                         const isLastStep = currentStep === MAX_STEPS;
 
                         logger.log(`Agent Step ${currentStep}/${MAX_STEPS} started`, 'info');
+                        currentStep === 1 ? sendStreamEvent('status', '思考中...') : sendStreamEvent('status', '彙整數據中...');
 
                         const runner = await openai.chat.completions.create({
                             model: 'gpt-4o-mini',
@@ -114,7 +121,7 @@ export async function POST(req) {
 
                             // 串流文字給前端
                             if (delta?.content) {
-                                controller.enqueue(encoder.encode(delta.content));
+                                sendStreamEvent('text', delta.content);
                                 loopResponse += delta.content;
                                 fullResponse += delta.content;
                             }
@@ -164,6 +171,8 @@ export async function POST(req) {
                                 const functionArgs = toolCall.function.arguments;
                                 const functionToCall = toolImplementations[functionName];
 
+                                sendStreamEvent('tool_start', { name: functionName }); // tell frontend user is using tools
+
                                 if (!functionToCall) {
                                     logger.log(`Tool ${functionName} not found`, 'error');
                                     safeMessages.push({
@@ -185,6 +194,9 @@ export async function POST(req) {
                                 // Core: run the tool implementation
                                 const toolResult = await functionToCall(args);
 
+                                await new Promise((resolve) => setTimeout(resolve, 500)); // little bug，先刻意寫死 500ms 讓前端渲染狀態
+                                sendStreamEvent('tool_end', { name: functionName });
+
                                 // 將工具執行結果寫回對話歷史，準備進入下一個迴圈
                                 safeMessages.push({
                                     role: 'tool',
@@ -204,11 +216,12 @@ export async function POST(req) {
 
                 try {
                     await runAgentLoop();
+                    sendStreamEvent('status', '完成');
                 } catch (err) {
                     logger.log(`Agent Loop Error: ${err.message}`, 'error');
                     logData.status = 'error';
                     logData.error_msg = err.message;
-                    controller.enqueue(encoder.encode(`\n\n[系統錯誤: ${err.message}]`));
+                    sendStreamEvent('error', `系統錯誤: ${err.message}`);
                 } finally {
                     logData.tool_used = logData.tool_used.join(',');
                     const duration = (performance.now() - startTime).toFixed(0);
@@ -238,7 +251,7 @@ export async function POST(req) {
         });
 
         return new NextResponse(stream, {
-            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+            headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
         });
     } catch (error) {
         logger.log(`Fatal Route Error: ${error.message}`, 'error');

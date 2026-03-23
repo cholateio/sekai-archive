@@ -19,7 +19,7 @@ const NOTICE = `
 
 export default function RankingView() {
     const { cards, addCard, updateCard, removeCard } = useMonitor();
-    const { generate, isLoading, setIsLoading, result } = useStatelessLLM();
+    const { generate, isLoading, setIsLoading, result, agentState } = useStatelessLLM();
     const [input, setInput] = useState('');
     const [activeCardId, setActiveCardId] = useState(null);
     const [showWarning, setShowWarning] = useState(false);
@@ -219,8 +219,18 @@ export default function RankingView() {
                                         )}
                                     >
                                         {card.content ? (
-                                            <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-headings:text-gray-100 prose-headings:text-xs prose-headings:font-bold prose-headings:uppercase prose-strong:text-cyan-300 prose-table:w-full prose-table:text-left prose-th:text-gray-400 prose-th:font-normal prose-td:text-gray-300 prose-td:py-1">
-                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{card.content}</ReactMarkdown>
+                                            <div className="flex flex-col">
+                                                <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-headings:text-gray-100 prose-headings:text-xs prose-headings:font-bold prose-headings:uppercase prose-strong:text-cyan-300 prose-table:w-full prose-table:text-left prose-th:text-gray-400 prose-th:font-normal prose-td:text-gray-300 prose-td:py-1">
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{card.content}</ReactMarkdown>
+                                                </div>
+
+                                                {/* 當內容產出到一半，模型又跑去思考或呼叫工具時顯示 */}
+                                                {card.isLoading && card.id === activeCardId && agentState && (
+                                                    <div className="mt-3 flex items-center gap-2 text-cyan-400 opacity-80">
+                                                        <RefreshCw className="h-3 w-3 animate-spin" />
+                                                        <span className="animate-pulse text-xs font-mono">{agentState}</span>
+                                                    </div>
+                                                )}
                                             </div>
                                         ) : (
                                             // Empty State (Idle)
@@ -229,7 +239,12 @@ export default function RankingView() {
                                                 onClick={(e) => handleRefreshCard(e, card)}
                                             >
                                                 {card.isLoading ? (
-                                                    <span className="animate-pulse font-mono text-xs">FETCHING DATA...</span>
+                                                    /* 沒有內容且在 Loading 時，顯示 agentState */
+                                                    <span className="animate-pulse font-mono text-xs text-cyan-500">
+                                                        {card.id === activeCardId && agentState
+                                                            ? agentState.toUpperCase()
+                                                            : 'FETCHING DATA...'}
+                                                    </span>
                                                 ) : (
                                                     <>
                                                         <Activity className="h-5 w-5 opacity-50" />
@@ -244,12 +259,12 @@ export default function RankingView() {
 
                                     {/* Footer Timestamp */}
                                     {card.timestamp && !card.isLoading && (
-                                        <div className="mt-4 shrink-0 text-[10px] text-gray-200 font-mono text-right opacity-80">
+                                        <div className="mt-4 shrink-0 text-[10px] text-gray-400 font-mono text-right opacity-80">
                                             {new Date(card.timestamp).toLocaleTimeString()}
                                             <button
                                                 onClick={(e) => handleRefreshCard(e, card)}
                                                 disabled={isLoading}
-                                                className="ml-4 text-gray-400 hover:text-cyan-400 transition-colors"
+                                                className="ml-4 hover:text-cyan-400 transition-colors"
                                                 title="Refresh"
                                             >
                                                 <RefreshCw className="h-3.5 w-3.5" />
