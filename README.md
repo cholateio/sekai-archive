@@ -2,7 +2,7 @@
 
 ### An Intelligent Event Strategy Assistant for Project Sekai
 
-![Status](https://img.shields.io/badge/Status-Beta-blue) ![License](https://img.shields.io/badge/License-MIT-green)
+![Status](https://img.shields.io/badge/Status-Beta-blue) ![License](https://img.shields.io/badge/License-GPL3.0-green)
 
 ### [View Live Demo](https://sekai-archive.vercel.app/)
 
@@ -32,3 +32,5 @@ I built this project because I really love the game. Also to solve the pain poin
 - **AI Engine:** OpenAI API (GPT-4.1-mini & text-embedding-3-small)
 - **Infrastructure:** Vercel (Edge & Serverless Functions), Upstash (Redis Rate Limiting)
 - **Styling:** Tailwind CSS v4, Framer Motion, Recharts
+
+This is an "unofficial fan research project", all game resource copyrights belong to Sega.
