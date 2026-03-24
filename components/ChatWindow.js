@@ -11,8 +11,8 @@ const JUDGE_FALLBACK_MSG = `關於 **即時榜線與活動數據**，建議您�
 
 export default function ChatWindow() {
     const [input, setInput] = useState('');
-    const { currentMessages, addMessage } = useChat();
-    const { isLoading, setIsLoading, sendMessage, regenerate, agentState } = useLLM();
+    const { currentMessages, addMessage, updateStreamMessage } = useChat();
+    const { isLoading, setIsLoading, sendMessage, regenerate, agentState, setAgentState } = useLLM();
     const { inputError, validateInput } = usePreprocess();
 
     const handleSubmit = async (e) => {
@@ -28,16 +28,24 @@ export default function ChatWindow() {
         const queryText = input.trim();
         setInput('');
 
-        // First add user's message into chat room window
+        // First add user's and robot's message into chat room window
         addMessage({
             id: Date.now().toString(),
             role: 'user',
             content: queryText,
             time: new Date().toLocaleTimeString(),
         });
+        let robotMessageId = (Date.now() + 1).toString();
+        addMessage({
+            id: robotMessageId,
+            role: 'assistant',
+            content: '',
+            time: new Date().toLocaleTimeString(),
+        });
 
         // Call judge agent for intent check
         setIsLoading(true);
+        setAgentState('分析意圖中...');
         try {
             const judgeRes = await fetch('/api/judge', {
                 method: 'POST',
@@ -46,31 +54,22 @@ export default function ChatWindow() {
             });
             const judgeResult = await judgeRes.json();
 
-            setIsLoading(false);
-
-            let robotMessage = { id: (Date.now() + 1).toString(), role: 'assistant', time: new Date().toLocaleTimeString() };
             if (judgeResult.intent == 'query_score') {
-                addMessage({
-                    ...robotMessage,
-                    content: JUDGE_FALLBACK_MSG,
-                });
+                setIsLoading(false);
+                setAgentState(null);
+                updateStreamMessage(JUDGE_FALLBACK_MSG);
             } else if (judgeResult.intent == 'garbage') {
-                addMessage({
-                    ...robotMessage,
-                    content: judgeResult.reason,
-                });
+                setIsLoading(false);
+                setAgentState(null);
+                updateStreamMessage(judgeResult.reason);
             } else {
-                // Create an empty assistant message in the UI and prepare to receive the stream
-                addMessage({ ...robotMessage, content: '' });
                 sendMessage(queryText, judgeResult.intent);
             }
         } catch (err) {
             console.error('[ChatWindow] Router check failed: ', err);
-            addMessage({
-                ...robotMessage,
-                content: 'System error, please try again later.',
-                time: new Date().toLocaleTimeString(),
-            });
+            setIsLoading(false);
+            setAgentState(null);
+            updateStreamMessage('System error, please try again later.');
         }
     };
 

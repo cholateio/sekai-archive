@@ -26,13 +26,13 @@ const SessionList = memo(function SessionList({ sessions, activeId, currentView,
                             'flex w-full items-center gap-4 rounded-xl px-4 py-3 text-[15px] font-medium transition-all duration-200 pr-10',
                             activeId === session.id && currentView === 'chat'
                                 ? 'bg-[#2f2f2f] text-white'
-                                : 'text-gray-400 hover:bg-[#2F2F2F] hover:text-white'
+                                : 'text-gray-400 hover:bg-[#2F2F2F] hover:text-white',
                         )}
                     >
                         <MessageSquare
                             className={cn(
                                 'h-[22px] w-[22px]',
-                                activeId === session.id && currentView === 'chat' ? 'text-white' : 'text-gray-500'
+                                activeId === session.id && currentView === 'chat' ? 'text-white' : 'text-gray-500',
                             )}
                         />
                         <span className="truncate text-left flex-1">{session.title}</span>
@@ -41,7 +41,7 @@ const SessionList = memo(function SessionList({ sessions, activeId, currentView,
                     {/* Delete Button (Hover show) */}
                     <button
                         onClick={(e) => onDeleteSession(e, session.id)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 hover:text-red-400 transition-all"
                     >
                         <X className="h-4 w-4" />
                     </button>

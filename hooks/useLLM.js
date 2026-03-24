@@ -4,6 +4,8 @@ import { useState, useCallback } from 'react';
 import { useChat } from '@/context/ChatContext';
 import { useSettings } from '@/context/SettingsContext';
 
+const JUDGE_FALLBACK_MSG = `關於 **即時榜線與活動數據**，建議您使用**左側選單**中專用的工具查詢。\n\n那裡提供更完整、不被上下文干擾的即時數據！`;
+
 // 它的工作是「收集材料」。它負責去 React 的各個角落（Context, State）把資料抓過來。
 export function useLLM() {
     const [isLoading, setIsLoading] = useState(false);
@@ -121,6 +123,11 @@ export function useLLM() {
         deleteLastMessage();
 
         setIsLoading(true);
+        setAgentState('分析意圖中...');
+
+        // create empty bubble before judge
+        addMessage({ id: Date.now().toString(), role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
+
         try {
             const judgeRes = await fetch('/api/judge', {
                 method: 'POST',
@@ -130,14 +137,26 @@ export function useLLM() {
             if (!judgeRes.ok) throw new Error(`Judge API 發生錯誤: ${judgeRes.status}`);
             const judgeResult = await judgeRes.json();
 
-            addMessage({ id: Date.now().toString(), role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
+            if (judgeResult.intent === 'query_score') {
+                updateStreamMessage(JUDGE_FALLBACK_MSG);
+                setIsLoading(false);
+                setAgentState(null);
+                return;
+            } else if (judgeResult.intent === 'garbage') {
+                updateStreamMessage(judgeResult.reason);
+                setIsLoading(false);
+                setAgentState(null);
+                return;
+            }
+
             await streamResponse({ messages: historyForApi, intent: judgeResult.intent });
         } catch (err) {
             console.error('[Regenerate Judge Error]', err);
             updateStreamMessage(`\n\n[系統錯誤]: 無法重新驗證請求，請稍後重試 (${err.message})`);
             setIsLoading(false);
+            setAgentState(null);
         }
     }, [currentMessages, addMessage, deleteLastMessage, streamResponse, updateStreamMessage]);
 
-    return { isLoading, agentState, setIsLoading, sendMessage, regenerate };
+    return { isLoading, agentState, setAgentState, setIsLoading, sendMessage, regenerate };
 }

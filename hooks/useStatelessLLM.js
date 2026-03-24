@@ -103,5 +103,5 @@ export function useStatelessLLM() {
         [language, character],
     );
 
-    return { isLoading, agentState, setIsLoading, result, generate };
+    return { isLoading, agentState, setAgentState, setIsLoading, result, generate };
 }

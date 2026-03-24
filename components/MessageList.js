@@ -6,7 +6,7 @@ import MessageBubble from './MessageBubble';
 import { useAutoScroll } from '@/hooks/useAutoScroll';
 
 export default function MessageList({ messages, isLoading, agentState, onRegenerate }) {
-    const { scrollRef, bottomRef } = useAutoScroll(messages);
+    const { scrollRef, bottomRef } = useAutoScroll(messages, isLoading);
     const { deleteMessage } = useChat();
 
     if (!messages || messages.length === 0) {
