@@ -33,4 +33,4 @@ I built this project because I really love the game. Also to solve the pain poin
 - **Infrastructure:** Vercel (Edge & Serverless Functions), Upstash (Redis Rate Limiting)
 - **Styling:** Tailwind CSS v4, Framer Motion, Recharts
 
-This is an "unofficial fan research project", all game resource copyrights belong to Sega.
+Disclaimer: This is an "unofficial fan research project", all game resource copyrights belong to Sega.
