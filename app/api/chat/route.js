@@ -46,12 +46,13 @@ export async function POST(req) {
         logger.log(`Chating input: "${queryContent.slice(0, 20)}${queryContent.length > 20 ? '...' : ''}"`, 'info');
         logger.log(`Received tools: ${allowed_tools}`, 'info');
 
+        const tagRegex = /<\/?user_input>/g;
         let logData = {
             ip,
             country,
             session_id: sessionId,
             user_agent: userAgent,
-            query_content: queryContent.slice(0, 1000),
+            query_content: queryContent.slice(0, 1000).replace(tagRegex, '').trim(),
             favorite: config?.character || 'Unknown',
             model_used: 'gpt-4.1-mini',
             tool_used: [],
@@ -228,8 +229,8 @@ export async function POST(req) {
                     logData.duration_ms = parseInt(duration);
                     logData.response_preview = fullResponse.slice(0, 1000);
 
-                    const PRICE_IN = 0.15;
-                    const PRICE_OUT = 0.6;
+                    const PRICE_IN = 0.4;
+                    const PRICE_OUT = 1.6;
                     const cost =
                         (accumulatedUsage.prompt_tokens / 1e6) * PRICE_IN +
                         (accumulatedUsage.completion_tokens / 1e6) * PRICE_OUT;
