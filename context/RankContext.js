@@ -20,7 +20,7 @@ async function getLiveBorder() {
 export const getFloorDate = (inputDate = new Date()) => {
     const date = new Date(inputDate);
     const minutes = date.getMinutes();
-    const roundedMinutes = Math.floor(minutes / 10) * 10;
+    const roundedMinutes = Math.floor(minutes / 5) * 5;
     date.setMinutes(roundedMinutes, 0, 0);
     return date;
 };
